@@ -1,0 +1,3 @@
+# Left out of `git archive`, which builds the public repo.
+planning/ export-ignore
+Config/Private.xcconfig export-ignore

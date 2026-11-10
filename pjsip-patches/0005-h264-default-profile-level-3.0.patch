@@ -1,0 +1,45 @@
+H.264: default profile-level-id to Baseline 3.0 instead of Level 1.0
+====================================================================
+
+When a remote's SDP offers H.264 with no profile-level-id in the fmtp line,
+pjmedia falls back to the RFC 6184 default "42000A" — Baseline **Level 1.0**,
+whose maximum frame size is QCIF (176x144). Nothing constrains the remote to
+actually send QCIF, and a source that omits the attribute while sending CIF or
+VGA produces a stream the Level 1.0 profile cannot represent. Every frame is
+then discarded before it reaches the decoder and no video is ever rendered,
+while audio and RTP statistics look perfectly healthy.
+
+Observed on a TD1070 door panel: Asterisk offers `a=rtpmap:99 H264/90000` with
+no fmtp, pjsip answers `profile-level-id=42000a`, and the incoming 640x480
+stream renders nothing. When Asterisk happens to follow up with a re-INVITE
+carrying `profile-level-id=42E01F`, the same stream decodes normally — so the
+negotiated level, not the stream, is what gates decoding.
+
+This raises the fallback to "42E01E" (Baseline, constraint_set0+1+2, Level 3.0
+— up to 720x576), matching what the working re-INVITE negotiated. It only
+changes behaviour where the peer supplied no profile-level-id at all; an
+explicit attribute from the remote still wins.
+
+Apply from the pjproject root with `git apply <patch>`, or via
+build-pjsip-android.sh which applies it automatically post-clone.
+---
+diff --git a/pjmedia/src/pjmedia/vid_codec_util.c b/pjmedia/src/pjmedia/vid_codec_util.c
+index 947a96f..171d772 100644
+--- a/pjmedia/src/pjmedia/vid_codec_util.c
++++ b/pjmedia/src/pjmedia/vid_codec_util.c
+@@ -465,9 +465,13 @@ PJ_DEF(pj_status_t) pjmedia_vid_codec_h264_parse_fmtp(
+         }
+     }
+ 
+-    /* When profile-level-id is not specified, use default value "42000A" */
++    /* When profile-level-id is not specified, default to Baseline Level 3.0
++     * ("42E01E") rather than the spec's "42000A" (Level 1.0, QCIF 176x144).
++     * A remote that omits profile-level-id can still send CIF/VGA, which a
++     * Level 1.0 profile cannot represent, and every frame is then discarded.
++     */
+     if (h264_fmtp->profile_idc == 0) {
+-        const pj_str_t DEF_PROFILE = {"42000A", 6};
++        const pj_str_t DEF_PROFILE = {"42E01E", 6};
+ 
+         status = init_h264_profile(&DEF_PROFILE, h264_fmtp);
+         if (status != PJ_SUCCESS)

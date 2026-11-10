@@ -1,0 +1,16 @@
+// Build settings for the app target.
+//
+// The placeholders below build, but the app can't sign for a device or reach
+// a server with them. To use your own, create Config/Private.xcconfig next to
+// this file (see Private.example.xcconfig). It overrides the values here.
+
+// The host that serves the app API (/app/v1/) and the wake API (/wake/v1/).
+PB_SERVER_HOST = server.example.com
+
+// Your Apple Developer team, and an App ID registered to it with Push
+// Notifications enabled. The Keychain service, the OAuth redirect URI
+// (<bundle id>://oauth/callback) and the background task IDs derive from it.
+DEVELOPMENT_TEAM =
+PRODUCT_BUNDLE_IDENTIFIER = org.example.sipclient
+
+#include? "Private.xcconfig"

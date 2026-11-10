@@ -1,0 +1,90 @@
+ICE: don't send on a destroyed STUN socket (SIGABRT in pj_stun_sock_sendto)
+===========================================================================
+
+Both ICE send paths in ice_strans.c dereference `comp->stun[tp_idx].sock`
+without checking it, while `pj_ice_strans_destroy()` and
+`pj_ice_strans_update_comp_cnt()` set that field to NULL (ice_strans.c:1104
+and :1297). Destroy holds the ice_strans group lock; the send paths read the
+field *outside* it — pj_ice_strans_sendto2() releases the lock before picking
+the default candidate, and ice_tx_pkt() (the pj_ice_sess on_tx_pkt callback)
+never takes it at all. A connectivity check, a consent-freshness probe or an
+ordinary RTP packet in flight when media is torn down therefore reaches
+
+    pj_stun_sock_sendto(comp->stun[tp_idx].sock, ...)
+
+with a NULL socket. That function's first statement is
+
+    PJ_ASSERT_RETURN(stun_sock && pkt && dst_addr && addr_len, PJ_EINVAL);
+
+and since the Android build is a PJ_DEBUG build, pj_assert() is plain
+assert() — so instead of returning PJ_EINVAL the library calls abort() and
+takes the whole process with it:
+
+    ../src/pjnath/stun_sock.c:758: pj_stun_sock_sendto(...):
+    assertion "stun_sock && pkt && dst_addr && addr_len" failed
+    signal 6 (SIGABRT), raised on a pjsip worker thread
+
+Observed on the TD1070 panel (07-30 12:32, ICE enabled with STUN); the call
+teardown and the send race are ~3s apart in the log. The other three
+arguments cannot be NULL here: pj_ice_strans_sendto2() asserts `dst_addr &&
+dst_addr_len` on entry and the packet buffer is the caller's, so the socket
+is the only candidate.
+
+The TURN branch of both functions already has exactly this NULL check —
+`if (comp->turn[tp_idx].sock == NULL) { status = PJ_EINVALIDOP; ... }`, added
+upstream for pjproject#1316. This patch gives the STUN branch the same guard,
+so a send racing a teardown returns PJ_EINVALIDOP (a dropped packet on a
+transport that is going away anyway) instead of aborting.
+
+This does not close the TOCTOU window itself — the socket can still be
+destroyed between the check and the send — but pj_stun_sock_sendto() takes the
+stun_sock group lock and re-checks `active_sock`, so a stale-but-alive handle
+is already handled there. Holding the ice_strans group lock across the send
+would be the fully race-free fix, but it inverts the lock order used by the
+stun_sock receive callbacks and risks deadlock, so it is deliberately avoided.
+
+Recommended companion change (not part of this patch): build with PJ_DEBUG=0
+/ -DNDEBUG so any remaining pjlib assertion logs and returns an error rather
+than aborting the process.
+
+Apply from the pjproject root with `git apply <patch>`, or via
+build-pjsip-android.sh which applies it automatically post-clone.
+--- a/pjnath/src/pjnath/ice_strans.c
++++ b/pjnath/src/pjnath/ice_strans.c
+@@ -1964,6 +1964,16 @@
+             const pj_sockaddr_t *dest_addr;
+             unsigned dest_addr_len;
+ 
++            /* Same guard as the TURN branch above: pj_ice_strans_destroy()
++             * may have destroyed the STUN sock while this send was in
++             * flight, in which case the pointer is already NULL. Without
++             * this, pj_stun_sock_sendto() aborts on its argument assertion.
++             */
++            if (comp->stun[tp_idx].sock == NULL) {
++                status = PJ_EINVALIDOP;
++                goto on_return;
++            }
++
+             if (comp->ipv4_mapped) {
+                 if (comp->synth_addr_len == 0 ||
+                     pj_sockaddr_cmp(&comp->dst_addr, dst_addr) != 0)
+@@ -2287,6 +2297,19 @@
+         const pj_sockaddr_t *dest_addr;
+         unsigned dest_addr_len;
+ 
++        /* Mirrors the TP_TURN branch above: the component's STUN sock is
++         * NULLed by pj_ice_strans_destroy() / pj_ice_strans_update_comp_cnt()
++         * under the ice_strans group lock, while this send path reads it
++         * outside that lock. A connectivity check or an RTP packet racing a
++         * media teardown therefore arrives here with sock == NULL, and
++         * pj_stun_sock_sendto()'s PJ_ASSERT_RETURN aborts the process on a
++         * PJ_DEBUG build instead of returning an error.
++         */
++        if (comp->stun[tp_idx].sock == NULL) {
++            status = PJ_EINVALIDOP;
++            goto on_return;
++        }
++
+         if (comp->ipv4_mapped) {
+             if (comp->synth_addr_len == 0 ||
+                 pj_sockaddr_cmp(&comp->dst_addr, dst_addr) != 0)

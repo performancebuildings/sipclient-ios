@@ -1,0 +1,8 @@
+// Copy this file to Private.xcconfig and fill in your own values.
+
+// Host only: no scheme, no path. The app uses https.
+PB_SERVER_HOST = intercom.example.org
+
+// The 10-character team ID from developer.apple.com, Membership details.
+DEVELOPMENT_TEAM = ABCDE12345
+PRODUCT_BUNDLE_IDENTIFIER = org.example.sipclient

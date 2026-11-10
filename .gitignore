@@ -1,0 +1,5 @@
+# Built by scripts/build-pjsip-ios.sh
+Vendor/
+xcuserdata/
+.DS_Store
+appstore_assets/
